@@ -1,0 +1,670 @@
+---
+title: "Final Project"
+output: pdf_document
+date: "2024-04-16"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r package}
+library(haven) # LOAD DATASET
+library(MASS) # Stepwise selection, LDA
+library(e1071) # Naive Bayes
+```
+
+```{r load_data, eval = FALSE}
+data = read_dta(file = "tedsa_puf_2021_Stata.dta")
+
+# Keep the variables of interest
+var = c("CASEID", "AGE", "GENDER", "RACE", "MARSTAT", "EDUC", "EMPLOY", "ARRESTS",
+        "STFIPS", "FRSTUSE1", "NOPRIOR", "SUB1", "DSMCRIT")
+new_data = data[,var]
+
+# Removing the missing DSM scores
+new_data = new_data[new_data$DSMCRIT != -9, ]
+# N = 39,464
+
+# North east: Connecticut, Maine, Massachusetts, New Hampshire, Rhode Island, and Vermont
+tedsa = new_data[new_data$STFIPS == 9| new_data$STFIPS == 23 | new_data$STFIPS == 25
+                 |new_data$STFIPS == 33 | new_data$STFIPS == 44 | new_data$STFIPS == 50, ]
+write_dta(tedsa, "tedsa.dta")
+write.csv(tedsa, "tedsa.csv")
+```
+
+```{r}
+tedsa = read_dta(file = "tedsa.dta")
+
+# Response variable: opioid use disorder (OUD)
+tedsa$OUD = ifelse(tedsa$DSMCRIT == 5 | tedsa$DSMCRIT == 12, 1, 0)
+
+# Remove missing values
+for (i in 1:14) {
+  tedsa = tedsa[tedsa[i] != -9, ]
+}
+
+write.csv(tedsa, "new_tedsa.csv")
+```
+
+1.  Descriptive Statistics
+
+```{r descriptive_demo}
+### Age
+# recode AGE into 4 categories
+tedsa$re_AGE[tedsa$AGE == 1 | tedsa$AGE == 2 | tedsa$AGE == 3] = 1
+tedsa$re_AGE[tedsa$AGE == 4 | tedsa$AGE == 5 | tedsa$AGE == 6 | tedsa$AGE == 7] = 2
+tedsa$re_AGE[tedsa$AGE == 8 | tedsa$AGE == 9 | tedsa$AGE == 10 | tedsa$AGE == 11] = 3
+tedsa$re_AGE[tedsa$AGE == 12] = 4
+
+tedsa$re_AGE = factor(tedsa$re_AGE, levels = c(1, 2, 3, 4), 
+                       labels = c("12-20 Years", "21-39 Years", 
+                                  "40-64 Years", "64-95 Years"))
+
+# > table(tedsa$re_AGE)
+# 12-20 Years 21-39 Years 40-64 Years 65-95 Years 
+#         562       21056       17135         711 
+
+# > round(prop.table(table(tedsa$re_AGE)), 3)
+# 
+# 12-20 Years 21-39 Years 40-64 Years 65-95 Years 
+#       0.014       0.534       0.434       0.018 
+
+### Gender
+tedsa$GENDER = factor(tedsa$GENDER, levels = c(1, 2), labels = c("Male", "Female"))
+
+# > table(tedsa$GENDER)
+#   Male Female 
+#  27486  11978
+
+# > round(prop.table(table(tedsa$GENDER)),3)
+#   Male Female 
+#  0.696  0.304 
+
+### Race
+tedsa$RACE = factor(tedsa$RACE, levels = seq(2, 9, 1),
+                     labels = c("American Indian", "Asian or Pacific Islander",
+                                "Black or African American", "White", "Asian",
+                                "Other single race", "Two or more races",
+                                "Native Hawaiian or Other Pacific Islander"))
+
+# > table(tedsa$RACE)
+# 
+#                           American Indian                 Asian or Pacific Islander 
+#                                       222                                         0 
+#                 Black or African American                                     White 
+#                                      5794                                     28141 
+#                                     Asian                         Other single race 
+#                                       224                                      4680 
+#                         Two or more races Native Hawaiian or Other Pacific Islander 
+#                                       319                                        84 
+# > round(prop.table(table(tedsa$RACE)),3)
+# 
+#                           American Indian                 Asian or Pacific Islander 
+#                                     0.006                                     0.000 
+#                 Black or African American                                     White 
+#                                     0.147                                     0.713 
+#                                     Asian                         Other single race 
+#                                     0.006                                     0.119 
+#                         Two or more races Native Hawaiian or Other Pacific Islander 
+#                                     0.008                                     0.002 
+### Marital status
+tedsa$MARSTAT = factor(tedsa$MARSTAT, levels = c(1, 2, 3, 4), 
+                        labels = c("Never married", "Now married", 
+                                   "Separated", "Divorced, widowed"))
+
+# > table(tedsa$MARSTAT)
+#     Never married       Now married         Separated Divorced, widowed 
+#             26934              5487              1122              5921
+
+# > round(prop.table(table(tedsa$MARSTAT)),3)
+#     Never married       Now married         Separated Divorced, widowed 
+#             0.682             0.139             0.028             0.150
+
+### Education
+tedsa$EDUC = factor(tedsa$EDUC, levels = c(1, 2, 3, 4, 5), 
+                     labels = c("Less than 9th grade", "Grades 9 to 11", 
+                                "High school graduate", "Some college or AA degree",
+                                "College graduate or above"))
+
+# > table(tedsa$EDUC)
+#       Less than 9th grade           Grades 9 to 11       High school graduate 
+#                      2436                      5657                     21509 
+# Some college or AA degree College graduate or above 
+#                      7444                      2418
+
+# > round(prop.table(table(tedsa$EDUC)),3)
+#       Less than 9th grade           Grades 9 to 11       High school graduate 
+#                     0.062                     0.143                     0.545 
+# Some college or AA degree College graduate or above 
+#                     0.189                     0.061 
+
+### Employment
+tedsa$re_EMPLOY[tedsa$EMPLOY == 1 | tedsa$EMPLOY == 2] = 1
+tedsa$re_EMPLOY[tedsa$EMPLOY == 3] = 2
+tedsa$re_EMPLOY[tedsa$EMPLOY == 4] = 3
+
+tedsa$re_EMPLOY = factor(tedsa$re_EMPLOY, levels = c(1, 2, 3),
+                       labels = c("Employed", "Unemployed", "Not in labor force"))
+
+# > table(tedsa$re_EMPLOY)
+#           Employed         Unemployed Not in labor force 
+#              12267              17417               9780
+
+# > round(prop.table(table(tedsa$re_EMPLOY)),3)
+#           Employed         Unemployed Not in labor force 
+#              0.311              0.441              0.248 
+```
+
+```{r descriptive_health}
+### Arrests
+tedsa$ARRESTS = factor(tedsa$ARRESTS, levels = c(0, 1, 2),
+                        labels = c("None", "Once", "Two or more times"))
+
+# > table(tedsa$ARRESTS)
+#              None              Once Two or more times 
+#             36681              2393               390
+
+# > round(prop.table(table(tedsa$ARRESTS)),3)
+#              None              Once Two or more times 
+#             0.929             0.061             0.010
+
+### Age at first use
+# recode into 3 categories
+tedsa$re_FRSTUSE1[tedsa$FRSTUSE1 == 1] = 1
+tedsa$re_FRSTUSE1[tedsa$FRSTUSE1 == 2 | tedsa$FRSTUSE1 == 3 | tedsa$FRSTUSE1 == 4] = 2
+tedsa$re_FRSTUSE1[tedsa$FRSTUSE1 == 5 | tedsa$FRSTUSE1 == 6] = 3
+tedsa$re_FRSTUSE1[tedsa$FRSTUSE1 == 7] = 4
+
+tedsa$re_FRSTUSE1 = factor(tedsa$re_FRSTUSE1, levels = c(1, 2, 3, 4), 
+                            labels = c("11 years and under", "12-20 years",
+                                       "21-29 years", "30 years and older"))
+
+# > table(tedsa$re_FRSTUSE1)
+# 11 years and under        12-20 years        21-29 years 30 years and older 
+#               1642              23557               9025               5240
+
+# > round(prop.table(table(tedsa$re_FRSTUSE1)),3)
+# 11 years and under        12-20 years        21-29 years 30 years and older 
+#              0.042              0.597              0.229              0.133
+
+### Previous substance use treatment episodes
+tedsa$NOPRIOR = as.numeric(tedsa$NOPRIOR)
+
+# > table(tedsa$NOPRIOR)
+#     0     1     2     3     4     5 
+# 10292  6515  5651  3406  2770 10830
+
+# > mean(tedsa$NOPRIOR)
+# [1] 2.363293
+# > sd(tedsa$NOPRIOR)
+# [1] 1.978206
+
+### Primary substance use
+# recode into 4 categories
+tedsa$re_SUB1 = 5
+tedsa$re_SUB1[tedsa$SUB1 == 1] = 1
+tedsa$re_SUB1[tedsa$SUB1 == 2] = 2
+tedsa$re_SUB1[tedsa$SUB1 == 5 | tedsa$SUB1 == 6 | tedsa$SUB1 == 7] = 3
+tedsa$re_SUB1[tedsa$SUB1 == 4] = 4
+tedsa$re_SUB1 = factor(tedsa$re_SUB1, levels = c(2, 3, 4, 5),
+                        labels = c("Alcohol", "Opioids",
+                                   "Marijuana", "Other drugs"))
+
+# > table(tedsa$re_SUB1)
+#     Alcohol     Opioids   Marijuana Other drugs 
+#       14379       17723        2947        4415
+
+# > round(prop.table(table(tedsa$re_SUB1)),3)
+#     Alcohol     Opioids   Marijuana Other drugs 
+#       0.364       0.449       0.075       0.112
+
+### Opioid use disorder
+tedsa$OUD = factor(tedsa$OUD, levels = c(0, 1), labels = c("No", "Yes"))
+
+# > table(tedsa$OUD)
+#    No   Yes 
+# 22517 16947
+
+# > round(prop.table(table(tedsa$OUD)),3)
+#    No   Yes 
+# 0.571 0.429
+```
+
+2. Parametric Models
+
+2.1 Logistic Regression
+
+```{r split_data}
+# 80% training and 20% test
+set.seed(0)
+tr_ind = sample(nrow(tedsa), nrow(tedsa)*0.8)
+tr_tedsa = tedsa[tr_ind, ]
+te_tedsa = tedsa[-tr_ind, ]
+```
+
+```{r logit_select}
+# Independent variables
+#   Categorical: re_AGE, GENDER, RACE, MARSTAT, EDUC, EMPLOY, ARRESTS, re_FRSTUSE1
+#   Continuous: NOPRIOR
+
+full.model = glm(OUD ~ re_AGE + GENDER + RACE + MARSTAT + EDUC + re_EMPLOY + ARRESTS
+                 + re_FRSTUSE1 + NOPRIOR, data = tr_tedsa, family = "binomial")
+null.model = glm(OUD ~ 1, data = tr_tedsa, family = "binomial")
+
+# Stepwise selection
+stepwise = stepAIC(full.model, direction = "both", trace = FALSE)
+formula(stepwise)
+# > formula(stepwise)
+# OUD ~ re_AGE + GENDER + RACE + MARSTAT + EDUC + EMPLOY + re_FRSTUSE1 + 
+#     NOPRIOR
+
+# Only ARRESTS is removed from the variable sets
+```
+
+```{r logit_mse}
+fit_logit = glm(OUD ~ re_AGE + GENDER + RACE + MARSTAT + EDUC + re_EMPLOY
+                + re_FRSTUSE1 + NOPRIOR, data = tr_tedsa, family = "binomial")
+
+# Training error
+pred_train_prob = predict(fit_logit, type = 'response')
+pred_train_label = ifelse(pred_train_prob > 0.5, 'Yes', 'No')
+
+table(pred_train_label, tr_tedsa$OUD) 
+mean(pred_train_label != tr_tedsa$OUD)
+
+# > table(pred_train_label, tr_tedsa$OUD) 
+#                 
+# pred_train_label    No   Yes
+#              No  14158  5499
+#              Yes  3817  8097
+# > mean(pred_train_label != tr_tedsa$OUD)
+# [1] 0.2950809
+
+# Test error
+pred_test_prob = predict(fit_logit, newdata = te_tedsa, type = 'response')
+pred_test_label = ifelse(pred_test_prob > 0.5, 'Yes', 'No')
+table(pred_test_label, te_tedsa$OUD) 
+mean(pred_test_label != te_tedsa$OUD)
+
+# > table(pred_test_label, te_tedsa$OUD) 
+#                
+# pred_test_label   No  Yes
+#             No  3582 1357
+#             Yes  960 1994
+# > mean(pred_test_label != te_tedsa$OUD)
+# [1] 0.2935512
+```
+
+2.2 Probit regression
+
+```{r probit}
+fit_probit = glm(OUD ~ re_AGE + GENDER + RACE + MARSTAT + EDUC + re_EMPLOY + re_FRSTUSE1
+                 + NOPRIOR, data = tr_tedsa, family = binomial(link = "probit"))
+
+# Training error
+pred_train_prob = predict(fit_probit, type = 'response')
+pred_train_label = ifelse(pred_train_prob > 0.5, 'Yes', 'No')
+table(pred_train_label, tr_tedsa$OUD) 
+mean(pred_train_label != tr_tedsa$OUD)
+
+# > table(pred_train_label, tr_tedsa$OUD) 
+#                 
+# pred_train_label    No   Yes
+#              No  14209  5559
+#              Yes  3766  8037
+# > mean(pred_train_label != tr_tedsa$OUD)
+# [1] 0.295366
+
+# Test error
+pred_test_prob = predict(fit_probit, newdata = te_tedsa, type = 'response')
+pred_test_label = ifelse(pred_test_prob > 0.5, 'Yes', 'No')
+table(pred_test_label, te_tedsa$OUD) 
+mean(pred_test_label != te_tedsa$OUD)
+
+# > table(pred_test_label, te_tedsa$OUD) 
+#                
+# pred_test_label   No  Yes
+#             No  3593 1375
+#             Yes  949 1976
+# > mean(pred_test_label != te_tedsa$OUD)
+# [1] 0.2944381
+```
+
+2.3 Naive Bayes
+
+```{r naivebayes}
+fit_nb = naiveBayes(OUD ~ re_AGE + GENDER + RACE + MARSTAT + EDUC + re_EMPLOY
+                    + re_FRSTUSE1 + NOPRIOR, data = tr_tedsa)
+
+# Training error
+tr_class_nb = predict(fit_nb, newdata = tr_tedsa)
+table(tr_class_nb, tr_tedsa$OUD)
+mean(tr_class_nb != tr_tedsa$OUD)
+
+# > table(tr_class_nb, tr_tedsa$OUD)
+#            
+# tr_class_nb    No   Yes
+#         No  13978  5341
+#         Yes  3997  8255
+# > mean(tr_class_nb != tr_tedsa$OUD)
+# [1] 0.2957778
+
+# Test error
+te_class_nb = predict(fit_nb, newdata = te_tedsa)
+table(te_class_nb, te_tedsa$OUD)
+mean(te_class_nb != te_tedsa$OUD)
+
+# > table(te_class_nb, te_tedsa$OUD)
+#            
+# te_class_nb   No  Yes
+#         No  3545 1331
+#         Yes  997 2020
+# > mean(te_class_nb != te_tedsa$OUD)
+# [1] 0.2949449
+```
+
+2.4 Model comparison
+
+ - Logistic regression: smallest test error
+ 
+```{r final}
+# Final model with whole datasets
+final_logit = glm(OUD ~ re_AGE + GENDER + RACE + MARSTAT + EDUC + re_EMPLOY + re_FRSTUSE1
+                  + NOPRIOR, data = tedsa, family = "binomial")
+# summary(final_logit)
+
+pred_train_prob1 = predict(final_logit, type = 'response')
+pred_train_label1 = ifelse(pred_train_prob1 > 0.5, 'Yes', 'No')
+
+table(pred_train_label1, tedsa$OUD) 
+mean(pred_train_label1 != tedsa$OUD)
+```
+
+3.  Non-Parametric Tree-Based Modeling
+
+-   CV pruning
+-   Bagging
+-   Random forest
+-   Boosting
+-   Model comparison
+
+```{r}
+### Test and training sets
+set.seed(0)
+tr_ind = sample(nrow(tedsa), nrow(tedsa)*0.8)
+tr_tedsa = tedsa[tr_ind, ]
+te_tedsa = tedsa[-tr_ind, ]
+```
+
+```{r}
+#classification Tree with CV pruning
+#see lecture 7 lab
+tr_tedsa$OUD <- as.factor(tr_tedsa$OUD)
+tr_tedsa <- na.omit(tr_tedsa)
+te_tedsa <- na.omit(te_tedsa)
+tedsa <- na.omit(tedsa)
+
+set.seed(0)
+
+tree.tedsa <- tree(OUD ~ re_AGE + GENDER + RACE + MARSTAT + EDUC + re_EMPLOY + ARRESTS + NOPRIOR + re_FRSTUSE1, data = tr_tedsa)
+
+#CV pruning
+
+cv.tedsa <- cv.tree(tree.tedsa, FUN = prune.misclass)
+names(cv.tedsa)
+
+
+bestsize <- cv.tedsa$size[which.min(cv.tedsa$dev)]
+prune.tedsa <- prune.tree(tree.tedsa, best = bestsize) 
+
+plot(prune.tedsa)
+text(prune.tedsa, pretty=0)
+
+
+#Misclassificiation rates
+summary(prune.tedsa)
+summary(cv.tedsa)
+
+
+#prediction performance, mce
+#Training mse
+tree_pred_tr <- predict(prune.tedsa, 
+                     newdata = tr_tedsa,
+                     type = "class")
+mean(tree_pred_tr != tr_tedsa$OUD)
+
+#test mse
+tree_pred_te <- predict(prune.tedsa, 
+                     newdata = te_tedsa,
+                     type = "class")
+mean(tree_pred_te != te_tedsa$OUD)
+(table(tree_pred_te, te_tedsa$OUD))
+
+#confusion matrix for performance on test data
+table(tree_pred_te, te_tedsa$OUD)
+(3537+1845)/(5382 + 2511)*100 #percent correctly predicted
+(1005 +1506)/ (5382 + 2511)
+```
+
+
+```{r}
+#CV tree continued different best size
+prune.tedsa.2 <- prune.misclass(tree.tedsa , best = 7)
+plot(prune.tedsa.2)
+text(prune.tedsa.2 , pretty = 0)
+
+tree.pred.2 <- predict(prune.tedsa.2, te_tedsa,
+
+                     type = "class")
+
+table(tree.pred.2, te_tedsa$OUD)
+
+```
+
+```{r}
+#Bagging
+set.seed(0)
+bag.tedsa.oud <- randomForest(OUD ~ re_AGE + GENDER + RACE + MARSTAT + EDUC + re_EMPLOY + ARRESTS + re_FRSTUSE1 + NOPRIOR, data = tr_tedsa, mtry = 9, importance=TRUE)
+
+
+importance(bag.tedsa.oud)
+varImpPlot(bag.tedsa.oud)
+
+
+#Training mse
+yhat.bag <- predict(bag.tedsa.oud,newdata=tr_tedsa)
+mean(yhat.bag != tr_tedsa$OUD)
+
+#Test mse
+yhat.bag <- predict(bag.tedsa.oud,newdata=te_tedsa)
+mean(yhat.bag != te_tedsa$OUD)
+table(yhat.bag, te_tedsa$OUD)
+
+```
+
+```{r}
+#Random Forest
+set.seed(0)
+
+rf.oud <- randomForest(OUD ~ re_AGE + GENDER + RACE + MARSTAT + EDUC + re_EMPLOY + ARRESTS + re_FRSTUSE1 + NOPRIOR, data = tr_tedsa, mtry = 3, importance=TRUE)
+
+rf.oud
+
+importance(rf.oud)
+varImpPlot(rf.oud)
+
+#test error
+yhat.rf <- predict(rf.oud,newdata=te_tedsa)
+mean(yhat.rf != te_tedsa$OUD)
+
+
+#training error
+yhat.rf <- predict(rf.oud,newdata=tr_tedsa)
+mean(yhat.rf != tr_tedsa$OUD)
+
+```
+
+
+```{r}
+#Boosting, may work better as it increases complexity of models that suffer from high bias
+set.seed(0)
+tr_tedsa$re_STFIPS <- as.factor(tr_tedsa$re_STFIPS)
+set.seed(0)
+boost.oud <- gbm(OUD ~ re_AGE + GENDER + RACE + MARSTAT + EDUC + re_EMPLOY + ARRESTS + re_FRSTUSE1 + NOPRIOR, data = tr_tedsa, distribution = "multinomial", n.trees = 5000, 
+                  interaction.depth = 1, cv.folds = 5)
+
+
+
+#test error
+yprob.boost <- predict(boost.oud, newdata = te_tedsa, n.trees = 5000, 
+                       type = "response", interaction.depth = 1, cv.folds = 5)
+yhat.boost <- levels(te_tedsa$OUD)[apply(yprob.boost, 1, which.max)]
+mean(yhat.boost != te_tedsa$OUD)
+
+#training error
+yprob.boost <- predict(boost.oud, newdata = tr_tedsa, n.trees = 5000, 
+                       type = "response", interaction.depth = 1, cv.folds = 5)
+yhat.boost <- levels(tr_tedsa$OUD)[apply(yprob.boost, 1, which.max)]
+mean(yhat.boost != tr_tedsa$OUD)
+
+summary(boost.oud)
+
+```
+
+```{r}
+#BIAS on best LOG REG MODEL
+#Fit logistic regression models with and without ethnicity.
+#with and without sensitive measure
+
+final_logit_w <-  glm(OUD ~ re_AGE + GENDER + RACE + MARSTAT + EDUC + re_EMPLOY + re_FRSTUSE1
+                  + NOPRIOR, data = tr_tedsa, family = "binomial")
+final_logit_wo <-  glm(OUD ~ re_AGE + GENDER + MARSTAT + EDUC + re_EMPLOY + re_FRSTUSE1
+                  + NOPRIOR, data = tr_tedsa, family = "binomial")
+
+
+#produce predictions- for logistic regression specify response so it will give probability of predicting response variable as 1 for example- but for different models it can be different
+te_tedsa$prob_1 <- predict(final_logit_w, te_tedsa, type = 'response')
+te_tedsa$prob_2 <- predict(final_logit_wo, te_tedsa, type = 'response')
+
+te_tedsa$OUD_01 <- ifelse(te_tedsa$OUD == 'Yes', 1, 0)
+te_tedsa$OUD_01 <- as.factor(te_tedsa$OUD_01)
+
+```
+
+
+
+```{r}
+#equalized odds for log reg with race
+res_eq <- equal_odds(data         = te_tedsa, 
+                     outcome      = 'OUD_01', 
+                     outcome_base = '0', 
+                     group        = 'RACE',
+                     probs        = 'prob_1', 
+                     cutoff       = 0.5, 
+                     base         = 'White')  
+res_eq$Metric
+res_eq$Metric_plot
+
+#for log reg without race
+res_eq_2 <- equal_odds(data         = te_tedsa, 
+                     outcome      = 'OUD_01', 
+                     outcome_base = '0', 
+                     group        = 'RACE',
+                     probs        = 'prob_2', 
+                     cutoff       = 0.5, 
+                     base         = 'White')   
+res_eq_2$Metric_plot
+```
+
+```{r}
+#proportional parity for log reg w/race
+res_eq <- prop_parity(data         = te_tedsa, 
+                     outcome      = 'OUD_01', 
+                     outcome_base = '0', 
+                     group        = 'RACE',
+                     probs        = 'prob_1', 
+                     cutoff       = .5, 
+                     base         = 'White')  
+res_eq$Metric
+res_eq$Metric_plot
+
+
+#no race
+res_eq <- prop_parity(data         = te_tedsa, 
+                     outcome      = 'OUD_01', 
+                     outcome_base = '0', 
+                     group        = 'RACE',
+                     probs        = 'prob_2', 
+                     cutoff       = .5, 
+                     base         = 'White')  
+res_eq$Metric
+res_eq$Metric_plot
+```
+
+
+```{r}
+#pred rate parity for log reg
+res1 <- pred_rate_parity(data         = te_tedsa, 
+                     outcome      = 'OUD_01', 
+                     outcome_base = '0', 
+                     group        = 'RACE',
+                     probs        = 'prob_1', 
+                     cutoff       = .5, 
+                     base         = 'White')  
+res1$Metric_plot
+res1$Metric
+
+#no race
+res1 <- pred_rate_parity(data         = te_tedsa, 
+                     outcome      = 'OUD_01', 
+                     outcome_base = '0', 
+                     group        = 'RACE',
+                     probs        = 'prob_2', 
+                     cutoff       = .5, 
+                     base         = 'White')  
+res1$Metric_plot
+res1$Metric
+
+```
+
+```{r}
+#model evaluation for random forest
+
+#precision
+9261/(9261+4335)
+
+#recall
+9261/(9261+4527)
+
+#f1 Score for random forest
+(2*(0.6811562*0.671671))/(0.6811562+0.671671)
+
+#Accuracy (correctly classified)
+(9261+13448)/31571
+
+#model evaluation for log reg
+final_logit = glm(OUD ~ re_AGE + GENDER + RACE + MARSTAT + EDUC + re_EMPLOY + re_FRSTUSE1
+                  + NOPRIOR, data = te_tedsa, family = "binomial")
+# summary(final_logit)
+
+pred_train_prob1 = predict(final_logit, type = 'response')
+pred_train_label1 = ifelse(pred_train_prob1 > 0.5, 'Yes', 'No')
+
+table(pred_train_label1, te_tedsa$OUD) 
+mean(pred_train_label1 != te_tedsa$OUD)
+
+
+#precision
+1985/(1985+962)
+
+#recall
+1985/(1985+1366)
+
+# f1 score log reg
+(2*(0.6735663*0.5923605))/(0.6735663+0.5923605)
+
+#accuracy
+(1985+3580)/7893
+
+```
